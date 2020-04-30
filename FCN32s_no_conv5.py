@@ -5,7 +5,6 @@ import torch
 class FCN32s(nn.Module):
   def __init__(self, n_class, pretrained_model):
     # model structure
-    # reuse the implementation in https://github.com/wkentaro/pytorch-fcn
     super(FCN32s, self).__init__()
     # conv1
     self.conv1_1 = nn.Conv2d(3, 64, 3, padding=100)
@@ -39,15 +38,6 @@ class FCN32s(nn.Module):
     self.relu4_3 = nn.ReLU(inplace=True)
     self.pool4 = nn.MaxPool2d(2, stride=2, ceil_mode=True)  # 1/16
 
-    # conv5
-    self.conv5_1 = nn.Conv2d(512, 512, 3, padding=1)
-    self.relu5_1 = nn.ReLU(inplace=True)
-    self.conv5_2 = nn.Conv2d(512, 512, 3, padding=1)
-    self.relu5_2 = nn.ReLU(inplace=True)
-    self.conv5_3 = nn.Conv2d(512, 512, 3, padding=1)
-    self.relu5_3 = nn.ReLU(inplace=True)
-    self.pool5 = nn.MaxPool2d(2, stride=2, ceil_mode=True)  # 1/32
-
     # fc6
     self.fc6 = nn.Conv2d(512, 4096, 7)
     self.relu6 = nn.ReLU(inplace=True)
@@ -59,7 +49,7 @@ class FCN32s(nn.Module):
     self.drop7 = nn.Dropout2d()
 
     self.score_fr = nn.Conv2d(4096, n_class, 1)
-    self.upscore = nn.ConvTranspose2d(n_class, n_class, 64, stride=32, bias=False)
+    self.upscore = nn.ConvTranspose2d(n_class, n_class, 32, stride=16, bias=False)
     
     self.pretrained_model = pretrained_model
     self.initialize_weight()
@@ -83,11 +73,6 @@ class FCN32s(nn.Module):
     h = self.relu4_2(self.conv4_2(h))
     h = self.relu4_3(self.conv4_3(h))
     h = self.pool4(h)
-
-    h = self.relu5_1(self.conv5_1(h))
-    h = self.relu5_2(self.conv5_2(h))
-    h = self.relu5_3(self.conv5_3(h))
-    h = self.pool5(h)
 
     h = self.relu6(self.fc6(h))
     h = self.drop6(h)
@@ -139,25 +124,28 @@ class FCN32s(nn.Module):
       self.conv4_1, self.relu4_1,
       self.conv4_2, self.relu4_2,
       self.conv4_3, self.relu4_3,
-      self.pool4,
-      self.conv5_1, self.relu5_1,
-      self.conv5_2, self.relu5_2,
-      self.conv5_3, self.relu5_3,
-      self.pool5
+      self.pool4
     ]
 
     for l1, l2 in zip(VGG16.features, features):
       if isinstance(l1, nn.Conv2d) and isinstance(l2, nn.Conv2d):
-        assert l1.weight.size() == l2.weight.size()
-        assert l1.bias.size() == l2.bias.size()
-        l2.weight.data.copy_(l1.weight.data)
-        l2.bias.data.copy_(l1.bias.data)
+        wshape = l2.weight.size()
+        l2.weight.data.copy_(l1.weight.data[:wshape[0], :wshape[1], :, :])
+        bshape = l2.bias.size()
+        l2.bias.data.copy_(l1.bias.data[:bshape[0]])
 
-    self.fc6.weight.data.copy_(VGG16.classifier[0].weight.data.view(self.fc6.weight.size()))
-    self.fc6.bias.data.copy_(VGG16.classifier[0].bias.data.view(self.fc6.bias.size()))
-    self.fc7.weight.data.copy_(VGG16.classifier[3].weight.data.view(self.fc7.weight.size()))
-    self.fc7.bias.data.copy_(VGG16.classifier[3].bias.data.view(self.fc7.bias.size()))
-  
+    wshape = self.fc6.weight.size()
+    w_tot = torch.numel(self.fc6.weight)
+    self.fc6.weight.data.copy_(VGG16.classifier[0].weight.data[:wshape[0], :int(w_tot / wshape[0])].view(self.fc6.weight.size()))
+    bshape = self.fc6.bias.shape()
+    self.fc6.bias.data.copy_(VGG16.classifier[0].bias.data[:bshape[0]].view(self.fc6.bias.size()))
+
+    wshape = self.fc7.weight.size()
+    w_tot = torch.numel(self.fc7.weight)
+    self.fc7.weight.data.copy_(VGG16.classifier[3].weight.data[:wshape[0], :int(w_tot / wshape[0])].view(self.fc7.weight.size()))
+    bshape = self.fc7.bias.shape()
+    self.fc7.bias.data.copy_(VGG16.classifier[3].bias.data[:bshape[0]].view(self.fc7.bias.size()))
+
     self.score_fr.weight.data.zero_()
     self.score_fr.bias.data.zero_()
     self.upscore.weight.data.copy_(self.get_upsampling_weight(self.upscore))
